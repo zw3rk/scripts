@@ -1,0 +1,153 @@
+#!/bin/bash
+
+set -e
+
+help_text() {
+	echo "Usage:
+  ${0##*/} [-h] [--host=HOST] [--no-upgrade] [--no-sysroot] [--no-binutils] [--zip] IPADDRESS
+
+Options:
+
+  -h, --help
+	display this help and exit
+
+  --host=HOST
+    set the host. [default: x86_64-apple-darwin]
+
+  --upgrade
+	perform package upgrades on the raspberry pi first.
+
+  --no-sysroot
+	do not copy the sysroot from the raspberry pi.
+
+  --no-binutils
+	do not build binutils.
+
+  --zip
+    create a zip archive."
+}
+
+RASPBIAN=2017_04_10_jessie_light
+REVISION=$(date "+%Y%m%d")
+
+HOST=x86_64-apple-darwin
+TARGET=arm-linux-gnueabihf
+UPGRADE=0
+SYSROOT=1
+BINUTILS=1
+CLANG=1
+ZIP=0
+RPI=
+args=()
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--host=*) HOST="${1#*=}"; shift 1;;
+		# --target is a hidden option
+		--target=*) TARGET="${1#*=}"; shift 1;;
+		--upgrade) UPGRADE=1; shift 1;;
+		--no-sysroot) SYSROOT=0; shift 1;;
+		--no-binutils) BINUTILS=0; shift 1;;
+        --no-clang) CLANG=0; shift 1;;
+		--zip) ZIP=1; shift 1;;
+		-h|--help) help_text; exit;;
+		*) args+=( "$1" ); shift 1;;
+	esac
+done
+
+SDK=$(pwd)/raspbian-sdk-${RASPBIAN}-${REVISION}-${HOST}
+
+
+if [ ${#args[@]} -lt 1 ]; then
+	echo "IPADDRESS needed" >&2
+	exit 1
+elif [ ${#args[@]} -gt 1 ]; then
+	echo "only one IPADDRESS allowed" >&2
+	exit 1
+fi
+RPI="${args}"
+
+if [ $UPGRADE -eq 1 ]; then
+	ssh "pi@${RPI}" sudo /bin/bash <<- EOF
+		set -e
+		echo "===> Updating packages..."
+		DEBIAN_FRONTEND=readline aptitude update -y > /dev/null
+		echo "===> Upgrading system..."
+		DEBIAN_FRONTEND=readline aptitude upgrade -y > /dev/null
+		echo "===> Installing rsync..."
+		DEBIAN_FRONTEND=readline aptitude install -y rsync > /dev/null
+		echo "===> Rebooting system..."
+		init 6
+	EOF
+	echo "===> Waiting for 90s for the raspberry pi to come back up..."
+	sleep 90
+fi
+
+if [ $SYSROOT -eq 1 ]; then
+	echo "===> Creating sdk at ${SDK}..."
+	if [ -d "${SDK}" ]; then 
+		echo "     SDK folder present. Deleting ${SDK}..."
+		rm -fR "${SDK}"
+	fi
+	mkdir -p "${SDK}"/{prebuilt,sysroot}
+	echo "===> Copying sysroot..."
+	rsync -rzLR --safe-links "pi@${RPI}:/{usr/{lib,lib/gcc}/${TARGET},usr/include,lib/${TARGET}}" "${SDK}/sysroot/" \
+		  --exclude "/usr/lib/ssl" \
+		  --exclude "/usr/share" \
+		  --exclude "/lib/systemd"
+fi
+
+if [ $BINUTILS -eq 1 ]; then
+	echo "===> building binutils..."
+	curl -O -L http://ftp.gnu.org/gnu/binutils/binutils-2.28.tar.gz
+	tar xzf binutils-2.28.tar.gz
+	( cd binutils-2.28
+	  ./configure --prefix="${SDK}/prebuilt" \
+				  --target=${TARGET} \
+				  --enable-gold=yes \
+				  --enable-ld=yes \
+				  --enable-targets=${TARGET} \
+				  --enable-multilib \
+				  --enable-interwork \
+				  --disable-werror \
+				  --quiet
+	  make --quiet && make --quiet install
+	)
+	rm -fR binutils-2.28
+	rm -fR binutils-2.28.tar.gz
+fi
+
+if [ $CLANG -eq 1 ]; then
+	echo "===> downloading clang+llvm..."
+	curl -O -L http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-${HOST}.tar.xz
+	echo "     decompressing..."
+	xz -d clang+llvm-4.0.0-${HOST}.tar.xz
+	echo "     installing..."
+	tar xf clang+llvm-4.0.0-${HOST}.tar -C "${SDK}/prebuilt" --strip-components=1
+	echo "     creating wrapper: ${TARGET}-clang..."
+	cat <<-EOF > "${SDK}/prebuilt/bin/${TARGET}-clang"
+	#!/bin/bash
+	BASE=\$(dirname \$0)
+	SYSROOT="\${BASE}/../../sysroot"
+	TARGET=${TARGET}
+	COMPILER_PATH="\${SYSROOT}/usr/lib/gcc/\${TARGET}/4.9"
+
+	exec env COMPILER_PATH="\${COMPILER_PATH}" \\
+    	 "\${BASE}/clang" --target=\${TARGET} \\
+        	             --sysroot="\${SYSROOT}" \\
+            	         -isysroot "\${SYSROOT}" \\
+                	     -L"\${COMPILER_PATH}" \\
+                    	 --gcc-toolchain="\${BASE}" \\
+	                     "\$@"
+	EOF
+	chmod +x "${SDK}/prebuilt/bin/${TARGET}-clang"
+	echo "     done."
+	rm clang+llvm-4.0.0-${HOST}.tar
+fi
+
+echo "===> sdk created at ${SDK}."
+if [ $ZIP -eq 1 ]; then
+	echo "===> Creating ${SDK}.zip..."
+	zip -q -r -9 "${SDK}.zip" "${SDK}"
+	echo "===> Done."
+fi
