@@ -4,7 +4,7 @@ set -e
 
 help_text() {
 	echo "Usage:
-  ${0##*/} [-h] [--host=HOST] [--no-upgrade] [--no-sysroot] [--no-binutils] [--zip] IPADDRESS
+  ${0##*/} [-h] [--host=HOST] [--upgrade] [--no-sysroot] [--no-binutils] [--zip] IPADDRESS
 
 Options:
 
