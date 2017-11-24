@@ -40,6 +40,9 @@ ZIP=0
 RPI=
 args=()
 
+BINUTILS_VER=2.29.1
+LLVM_VER=5.0.0
+
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--host=*) HOST="${1#*=}"; shift 1;;
@@ -85,7 +88,7 @@ fi
 
 if [ $SYSROOT -eq 1 ]; then
 	echo "===> Creating sdk at ${SDK}..."
-	if [ -d "${SDK}" ]; then 
+	if [ -d "${SDK}" ]; then
 		echo "     SDK folder present. Deleting ${SDK}..."
 		rm -fR "${SDK}"
 	fi
@@ -99,31 +102,31 @@ fi
 
 if [ $BINUTILS -eq 1 ]; then
 	echo "===> building binutils..."
-	curl -O -L http://ftp.gnu.org/gnu/binutils/binutils-2.28.tar.gz
-	tar xzf binutils-2.28.tar.gz
-	( cd binutils-2.28
-	  ./configure --prefix="${SDK}/prebuilt" \
-				  --target=${TARGET} \
+	curl -O -L "http://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz"
+	tar xzf "binutils-${BINUTILS_VER}.tar.gz"
+	( cd binutils-${BINUTILS_VER}
+	  ./configure "--prefix=${SDK}/prebuilt" \
+				  "--target=${TARGET}" \
 				  --enable-gold=yes \
 				  --enable-ld=yes \
-				  --enable-targets=${TARGET} \
+				  "--enable-targets=${TARGET}" \
 				  --enable-multilib \
 				  --enable-interwork \
 				  --disable-werror \
 				  --quiet
 	  make --quiet && make --quiet install
 	)
-	rm -fR binutils-2.28
-	rm -fR binutils-2.28.tar.gz
+	rm -fR "${BINUTILS_VER}"
+	rm -fR "${BINUTILS_VER}.tar.gz"
 fi
 
 if [ $CLANG -eq 1 ]; then
 	echo "===> downloading clang+llvm..."
-	curl -O -L http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-${HOST}.tar.xz
+	curl -O -L "http://releases.llvm.org/${LLVM_VER}/clang+llvm-${LLVM_VER}-${HOST}.tar.xz"
 	echo "     decompressing..."
-	xz -d clang+llvm-4.0.0-${HOST}.tar.xz
+	xz -d "clang+llvm-${LLVM_VER}-${HOST}.tar.xz"
 	echo "     installing..."
-	tar xf clang+llvm-4.0.0-${HOST}.tar -C "${SDK}/prebuilt" --strip-components=1
+	tar xf "clang+llvm-${LLVM_VER}-${HOST}.tar" -C "${SDK}/prebuilt" --strip-components=1
 	echo "     creating wrapper: ${TARGET}-clang..."
 	cat <<-EOF > "${SDK}/prebuilt/bin/${TARGET}-clang"
 	#!/bin/bash
@@ -142,7 +145,7 @@ if [ $CLANG -eq 1 ]; then
 	EOF
 	chmod +x "${SDK}/prebuilt/bin/${TARGET}-clang"
 	echo "     done."
-	rm clang+llvm-4.0.0-${HOST}.tar
+	rm "clang+llvm-${LLVM_VER}-${HOST}.tar"
 fi
 
 echo "===> sdk created at ${SDK}."
